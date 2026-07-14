@@ -12,6 +12,21 @@ dotenv.config();
 
 const app = express();
 
+// --- Lock-down config ------------------------------------------------
+// ALLOWED_ORIGINS: comma-separated list, e.g.
+//   "https://discoveratlanticcanada.com,https://www.discoveratlanticcanada.com"
+// WIDGET_SHARED_SECRET: any long random string, shared between this
+// deployment and the WordPress embed. It is NOT a substitute for real
+// auth (it ships in page source, so a determined person can read it) -
+// its job is to stop opportunistic bots and other sites from hot-linking
+// this endpoint and burning your OpenRouter quota, not to stop a
+// motivated attacker.
+const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS || "")
+    .split(",")
+    .map(s => s.trim())
+    .filter(Boolean);
+
+const WIDGET_SHARED_SECRET = process.env.WIDGET_SHARED_SECRET || "";
 
 // The client sends the photo as a base64 data-URL STRING field (not a
 // multipart file part), so multer/busboy treats it as a text field.
@@ -27,7 +42,50 @@ const upload = multer({
     }
 });
 
-app.use(cors());
+app.use(cors({
+    origin: function (origin, callback) {
+        // Same-origin tools (curl, server-to-server, Vercel's own preview
+        // pings) send no Origin header at all - allow those through so
+        // health checks don't break, but browsers always send Origin for
+        // cross-site fetch(), so this does not weaken the browser-facing
+        // lock-down.
+        if (!origin || ALLOWED_ORIGINS.length === 0 || ALLOWED_ORIGINS.includes(origin)) {
+            return callback(null, true);
+        }
+        return callback(new Error("Origin not allowed"));
+    }
+}));
+
+// --- Shared-secret + basic rate limit ---------------------------------
+// Best-effort, in-memory: resets on cold start and isn't shared across
+// concurrent Vercel instances. Fine as a first line of defense against
+// casual abuse; if this endpoint ever gets real traffic, swap this Map
+// for Upstash Redis (a few lines, works natively with Vercel).
+const rateLimitHits = new Map();
+const RATE_LIMIT_MAX = 20;
+const RATE_LIMIT_WINDOW_MS = 5 * 60 * 1000;
+
+function isRateLimited(ip) {
+    const now = Date.now();
+    const entry = rateLimitHits.get(ip);
+    if (!entry || now - entry.start > RATE_LIMIT_WINDOW_MS) {
+        rateLimitHits.set(ip, { start: now, count: 1 });
+        return false;
+    }
+    entry.count += 1;
+    return entry.count > RATE_LIMIT_MAX;
+}
+
+app.use("/api/chat", (req, res, next) => {
+    if (WIDGET_SHARED_SECRET && req.headers["x-widget-secret"] !== WIDGET_SHARED_SECRET) {
+        return res.status(401).json({ success: false, message: "Unauthorized." });
+    }
+    const ip = (req.headers["x-forwarded-for"] || req.socket.remoteAddress || "unknown").split(",")[0].trim();
+    if (isRateLimited(ip)) {
+        return res.status(429).json({ success: false, message: "Too many requests - please wait a few minutes and try again." });
+    }
+    next();
+});
 
 app.use(express.json({
     limit: "15mb"

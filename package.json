@@ -3,9 +3,9 @@
   "version": "1.0.0",
   "description": "Discover Atlantic Canada AI Planner",
   "type": "module",
-  "scripts": {
-    "dev": "node server/index.js"
-  },
+"scripts": {
+  "dev": "node api/chat.js"
+},
   "dependencies": {
     "cors": "^2.8.5",
     "dotenv": "^16.6.1",
