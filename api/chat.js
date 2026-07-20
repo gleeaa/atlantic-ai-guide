@@ -111,7 +111,7 @@ defaultHeaders: {
 }
 });
 
-const MODEL = "mistralai/mistral-small-3.2-24b-instruct";
+const MODEL = "openai/gpt-4o-mini";
 
 
 
